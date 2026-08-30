@@ -1,0 +1,47 @@
+import streamlit as st
+from supabase import create_client
+
+# 初始化数据库连接
+supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+
+st.title("群知识库与共创 Q&A")
+
+# 1. 提交新回答
+with st.form("new_answer_form"):
+    q_id = st.selectbox("选择问题", options=[1, 2, 3])
+    user_name = st.text_input("群友昵称")
+    answer_text = st.text_area("你的解答")
+    if st.form_submit_button("提交回答"):
+        supabase.table("answers").insert({
+            "question_id": q_id,
+            "author": user_name,
+            "content": answer_text,
+            "upvotes": 0
+        }).execute()
+        st.rerun()
+
+# 2. 查询并动态排序展示
+questions = supabase.table("questions").select("*").execute().data
+for q in questions:
+    st.subheader(f"Q: {q['title']}")
+    
+    # 获取该问题的所有回答，按点赞数倒序排列
+    answers = supabase.table("answers").select("*").eq("question_id", q["id"]).order("upvotes", desc=True).execute().data
+    
+    if answers:
+        best = answers[0]
+        st.markdown(f"**正式采纳答案**（赞同数: {best['upvotes']}）: {best['content']}")
+        if st.button(f"👍 赞同 ({best['upvotes']})", key=f"up_{best['id']}"):
+            supabase.table("answers").update({"upvotes": best["upvotes"] + 1}).eq("id", best["id"]).execute()
+            st.rerun()
+            
+        # 次高赞回答折叠展示
+        if len(answers) > 1:
+            with st.expander(f"查看其余 {len(answers) - 1} 条备选回答"):
+                for alt in answers[1:]:
+                    st.write(f"- **{alt['author']}** (赞同: {alt['upvotes']}): {alt['content']}")
+                    if st.button(f"👍 赞同 ({alt['upvotes']})", key=f"up_{alt['id']}"):
+                        supabase.table("answers").update({"upvotes": alt["upvotes"] + 1}).eq("id", alt["id"]).execute()
+                        st.rerun()
+    else:
+        st.info("暂无回答，欢迎提交第一条解答。")
