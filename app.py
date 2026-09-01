@@ -1,5 +1,6 @@
 import streamlit as st
 from supabase import create_client
+import time
 
 # 从 Streamlit Secrets 读取凭证
 supabase_url = st.secrets["SUPABASE_URL"]
@@ -16,16 +17,18 @@ if "voted_answers" not in st.session_state:
 with st.sidebar:
     st.markdown("### ⚙️ 管理员入口")
     # 这里从 Secrets 读取密码，如果没配置默认是 888888
-    admin_pwd = st.text_input("输入管理密码以启用删帖功能", type="password")
+    admin_pwd = st.text_input("输入管理密码以启用高级功能", type="password")
     is_admin = (admin_pwd == st.secrets.get("ADMIN_PASSWORD", "888888"))
     if is_admin:
         st.success("管理员身份已验证：高级管理模式开启")
 
 st.title("📌 汇车退债交流主页 & 共创 Q&A")
 
-# --- 新增了 tab_feedback ---
 tab_qa, tab_rules, tab_docs, tab_feedback = st.tabs(["❓ 共创 Q&A", "📜 群规须知", "📁 资料与公告", "💡 给开发者提建议"])
 
+# ==========================================
+# 标签页 1：共创 Q&A
+# ==========================================
 with tab_qa:
     search_kw = st.text_input("🔍 搜索相关问题...")
     
@@ -119,6 +122,9 @@ with tab_qa:
     else:
         st.info("当前还没有问题，或者没有搜到相关内容。")
 
+# ==========================================
+# 标签页 2：群规须知
+# ==========================================
 with tab_rules:
     st.markdown("""
     ### 📌 汇车退债交流主页 · 群规与共创指南
@@ -147,13 +153,79 @@ with tab_rules:
     3. 平台不采集任何敏感隐私（身份证号、证券账户密码、持仓截图原图等），请群友注意保护个人资产安全。
     """)
 
+# ==========================================
+# 标签页 3：资料与公告
+# ==========================================
 with tab_docs:
-    st.markdown("""
-    ### 📁 常用资料与活动计划
-    - **本期活动**：详见群置顶通知。
-    - **文件汇总**：可在此处附上各类公开文档网盘链接。
-    """)
+    st.markdown("### 📁 常用资料与公告")
+    st.markdown("- **本期活动**：详见群置顶通知。")
+    st.divider()
 
+    st.markdown("#### 📤 上传新资料")
+    uploader_name = st.text_input("上传者昵称", key="doc_uploader")
+    # Streamlit 默认限制单文件上传最大为 200MB
+    uploaded_file = st.file_uploader("选择文件（支持 PDF/Word/Excel/图片等）", key="file_uploader")
+    
+    if st.button("开始上传"):
+        if not uploader_name.strip():
+            st.warning("请填写上传者昵称！")
+        elif uploaded_file is None:
+            st.warning("请选择要上传的文件！")
+        else:
+            with st.spinner("文件上传中，请稍候..."):
+                file_name = uploaded_file.name
+                file_bytes = uploaded_file.read()
+                # 加上时间戳防止重名文件覆盖
+                safe_name = f"{int(time.time())}_{file_name}"
+                
+                try:
+                    # 1. 物理上传到 Supabase Storage
+                    supabase.storage.from_("group_docs").upload(
+                        path=safe_name, 
+                        file=file_bytes, 
+                        file_options={"content-type": uploaded_file.type}
+                    )
+                    # 2. 获取公开下载链接
+                    file_url = supabase.storage.from_("group_docs").get_public_url(safe_name)
+                    
+                    # 3. 把信息记录到数据库中展示
+                    supabase.table("documents").insert({
+                        "file_name": file_name,
+                        "file_url": file_url,
+                        "uploader": uploader_name.strip()
+                    }).execute()
+                    
+                    st.success("上传成功！")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"上传失败，请重试。错误信息: {e}")
+
+    st.divider()
+    st.markdown("#### 📥 资料列表")
+    
+    # 查询并展示已有资料
+    docs_res = supabase.table("documents").select("*").order("id", desc=True).execute()
+    docs = docs_res.data or []
+    
+    if docs:
+        for d in docs:
+            col_d1, col_d2 = st.columns([8, 1])
+            with col_d1:
+                # 使用 Markdown 生成可点击下载的超链接
+                st.markdown(f"📄 **[{d['file_name']}]({d['file_url']})**")
+                st.caption(f"上传者: {d['uploader']} | 时间: {d['created_at'][:10]}")
+            with col_d2:
+                # 管理员有权删除资料记录
+                if is_admin and st.button("🗑️ 删除", key=f"del_doc_{d['id']}"):
+                    supabase.table("documents").delete().eq("id", d["id"]).execute()
+                    st.rerun()
+            st.markdown("---")
+    else:
+        st.info("暂无资料，欢迎大家上传分享。")
+
+# ==========================================
+# 标签页 4：给开发者提建议
+# ==========================================
 with tab_feedback:
     st.markdown("### 💡 给开发者提建议")
     st.info("如果您对本网站有任何功能建议、排版改进或发现了 Bug，欢迎在此提交。")
